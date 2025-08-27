@@ -1,3 +1,4 @@
+
 import java.awt.*;
 import java.awt.event.*;
 import java.util.ArrayList;
@@ -8,159 +9,214 @@ import javax.swing.*;
 public class PanelJuego extends JPanel implements ActionListener, KeyListener {
 	public static final int ANCHO = 800;
 	public static final int ALTO = 600;
+
 	private Timer reloj;
 	private Jugador jugador;
 	private ArrayList<Bala> balas = new ArrayList<>();
 	private ArrayList<Enemigo> enemigos = new ArrayList<>();
 	private ArrayList<BalaEnemiga> balasEnemigas = new ArrayList<>();
-// controles
+
+	// controles
 	private boolean izq = false, der = false, espacio = false;
-// estado
+	// estado
 	private int puntos = 0;
-	private int nivel = 1; // aumentará indefinidamente
+	private int nivel = 1;
 	private boolean juegoTerminado = false;
+
 	private Random rnd = new Random();
+
+	// Control de disparo jugador
+	private long ultimoDisparoJugador = 0;
+	private final long COOLDOWN_JUGADOR = 500; // 300 ms entre disparos
+
+	// Control de kamikaze: solo 1 ataca a la vez
+	private Enemigo kamikazeAtacante = null;
+	private long proximoKamikazeTime = 0;
 
 	public PanelJuego() {
 		setPreferredSize(new Dimension(ANCHO, ALTO));
 		setBackground(Color.BLACK);
 		setFocusable(true);
 		addKeyListener(this);
+
 		jugador = new Jugador(ANCHO / 2 - 20, ALTO - 70);
+		jugador.vidas = 3; // asegúrate que Jugador tenga el campo 'vidas'
+
 		generarNivel(nivel);
+
 		reloj = new Timer(16, this);
 		reloj.start();
 	}
-// Genera enemigos según el número de nivel.
-// La dificultad aumenta con el nivel: más enemigos, más velocidad y más hp.
 
+	// Genera enemigos según el número de nivel y regula la proporción de tipos.
 	private void generarNivel(int n) {
 		enemigos.clear();
-		balasEnemigas.clear();
 		balas.clear();
-		int tipo = n % 3; // 1: formación, 2: kamikaze, 0: shooters
-		int filas = 3 + Math.min(3, n / 5); // cada 5 niveles agregamos una fila, hasta +3
-		int cols = 6 + Math.min(6, n / 4); // más columnas con el nivel
-		if (tipo == 1) { // formación que baja toda junta
-			for (int f = 0; f < filas; f++) {
-				for (int c = 0; c < cols; c++) {
-					int x = 60 + c * 60;
-					int y = 40 + f * 45;
-					Enemigo en = new Enemigo(x, y, Enemigo.TIPO_NORMAL);
-					en.velocidad += n / 6; // aumenta la velocidad con el nivel
-					en.hp += n / 10; // un poco más de vida cada 10 niveles
-					enemigos.add(en);
+		balasEnemigas.clear();
+		kamikazeAtacante = null;
+
+		int filas = 3 + n / 2; // aumenta de a poco
+		int cols = 8;
+
+		for (int f = 0; f < filas; f++) {
+			for (int c = 0; c < cols; c++) {
+				int x = 60 + c * 70;
+				int y = 40 + f * 50;
+				int tipo = Enemigo.TIPO_NORMAL;
+
+				if (n == 1) {
+					tipo = Enemigo.TIPO_NORMAL;
+				} else if (n == 2) {
+					// pocos shooters
+					if (rnd.nextDouble() < 0.18)
+						tipo = Enemigo.TIPO_SHOOTER;
+				} else if (n == 3) {
+					// pocos kamikazes
+					if (rnd.nextDouble() < 0.18)
+						tipo = Enemigo.TIPO_KAMIKAZE;
+				} else {
+					// nivel 4+: mezcla con menos normales según sube el nivel
+					double r = rnd.nextDouble();
+					double probShooter = Math.min(0.3, 0.08 + n * 0.006);
+					double probKamikaze = Math.min(0.3, 0.06 + n * 0.006);
+					if (r < probShooter)
+						tipo = Enemigo.TIPO_SHOOTER;
+					else if (r < probShooter + probKamikaze)
+						tipo = Enemigo.TIPO_KAMIKAZE;
+					else
+						tipo = Enemigo.TIPO_NORMAL;
 				}
-			}
-		} else if (tipo == 2) { // kamikazes
-			int cantidad = 6 + n; // cada nivel más kamikazes
-			for (int i = 0; i < cantidad; i++) {
-				int x = 20 + rnd.nextInt(ANCHO - 40);
-				int y = -rnd.nextInt(600);
-				Enemigo en = new Enemigo(x, y, Enemigo.TIPO_KAMIKAZE);
-				en.velocidad += n / 8;
-				enemigos.add(en);
-			}
-		} else { // shooters (disparan)
-			for (int f = 0; f < filas; f++) {
-				for (int c = 0; c < cols; c++) {
-					int x = 50 + c * 55;
-					int y = 40 + f * 50;
-					Enemigo en = new Enemigo(x, y, Enemigo.TIPO_SHOOTER);
-					en.velocidad += n / 7;
-					en.hp += n / 12;
-					enemigos.add(en);
-				}
+
+				enemigos.add(new Enemigo(x, y, tipo, n)); // importante: constructor usa nivel
 			}
 		}
+
+		// programar primer kamikaze (si hay) entre 1s y 4s (se reduce un poco con el nivel)
+		long ahora = System.currentTimeMillis();
+		int base = Math.max(600, 2000 - n * 50); // reduce tiempo con niveles
+		proximoKamikazeTime = ahora + base + rnd.nextInt(2000);
 	}
 
 	@Override
 	public void actionPerformed(ActionEvent e) {
 		if (juegoTerminado)
 			return;
-		// movimiento del jugador
+
+		// controles
 		if (izq)
 			jugador.moverIzquierda();
 		if (der)
 			jugador.moverDerecha();
-		// disparo con límite y cooldown simple
+
+		// disparo jugador con cooldown 0.3s
 		if (espacio) {
-			if (balas.size() < 4) {
+			long ahora = System.currentTimeMillis();
+			if (ahora - ultimoDisparoJugador >= COOLDOWN_JUGADOR) {
 				balas.add(new Bala(jugador.getCentroX() - 2, jugador.y - 10));
+				ultimoDisparoJugador = ahora;
 			}
-			espacio = false; // más simple para principiantes
 		}
-		// mover balas del jugador
-		Iterator<Bala> itB = balas.iterator();
-		while (itB.hasNext()) {
+
+		// mover balas jugador
+		for (Iterator<Bala> itB = balas.iterator(); itB.hasNext();) {
 			Bala b = itB.next();
 			b.mover();
 			if (b.y + b.alto < 0)
 				itB.remove();
 		}
+
 		// mover enemigos
-		boolean bordeTocado = false;
-		for (Enemigo en : enemigos) {
-			if (en.tipo == Enemigo.TIPO_KAMIKAZE) {
+		for (Iterator<Enemigo> itE = enemigos.iterator(); itE.hasNext();) {
+			Enemigo en = itE.next();
+
+			// si es el kamikaze que está atacando -> sigue al jugador
+			if (en.atacando) {
+				// si el atacante fue eliminado antes (por bala), se limpia más abajo
+				// usar seguirJugador para movimiento de ataque
 				en.seguirJugador(jugador);
 			} else {
 				en.mover();
 			}
-			if (en.x <= 0 || en.x + en.ancho >= ANCHO)
-				bordeTocado = true;
-			// si llegan abajo demasiado
-			if (en.y + en.alto >= jugador.y) {
-				// castigo: pierdes una vida y se reinicia el nivel
-				jugador.vidas -= 1;
-				if (jugador.vidas <= 0)
-					juegoTerminado = true;
-			}
-		}
-		// si cualquier enemigo toca borde, todos bajan y cambian dirección (formación)
-		if (bordeTocado) {
-			for (Enemigo en : enemigos) {
-				en.direccion *= -1;
-				en.y += 20 + nivel / 5; // más caída con niveles altos
-			}
-		}
-		// disparos de enemigos (solo shooters)
-		for (Enemigo en : enemigos) {
-			if (en.tipo == Enemigo.TIPO_SHOOTER) {
-				double prob = 0.003 + nivel * 0.0007; // sube con el nivel
-				if (rnd.nextDouble() < prob) {
-					balasEnemigas.add(new BalaEnemiga(en.getCentroX() - 2, en.y + en.alto + 2));
 
+			// si el enemigo llega muy abajo y choca con jugador
+			if (en.getRect().intersects(jugador.getRect())) {
+				jugador.vidas--;
+				itE.remove();
+				if (en == kamikazeAtacante)
+					kamikazeAtacante = null;
+				if (jugador.vidas <= 0) {
+					juegoTerminado = true;
+					return;
+				}
+				continue;
+			}
+
+			// si el enemigo sale del panel por abajo, quitarlo (y liberar atacante)
+			if (en.y > ALTO + 50) {
+				if (en == kamikazeAtacante)
+					kamikazeAtacante = null;
+				itE.remove();
+				continue;
+			}
+
+			// shooters: disparan según su temporizador interno
+			if (en.tipo == Enemigo.TIPO_SHOOTER) {
+				if (en.puedeDisparar()) {
+					balasEnemigas.add(new BalaEnemiga(en.getCentroX() - 2, en.y + en.alto + 2));
+					en.resetDisparo();
 				}
 			}
 		}
-		// mover balas enemigas
-		Iterator<BalaEnemiga> itBE = balasEnemigas.iterator();
-		while (itBE.hasNext()) {
-			BalaEnemiga be = itBE.next();
+
+		// elegir un kamikaze para atacar (solo 1 a la vez)
+		long ahora = System.currentTimeMillis();
+		if (kamikazeAtacante == null && ahora >= proximoKamikazeTime) {
+			// buscar kamikazes vivos
+			ArrayList<Enemigo> listaK = new ArrayList<>();
+			for (Enemigo e2 : enemigos) {
+				if (e2.tipo == Enemigo.TIPO_KAMIKAZE && !e2.atacando)
+					listaK.add(e2);
+			}
+			if (!listaK.isEmpty()) {
+				Enemigo elegido = listaK.get(rnd.nextInt(listaK.size()));
+				elegido.atacando = true;
+				kamikazeAtacante = elegido;
+			}
+			// programar siguiente intento (reduce con nivel)
+			int base = Math.max(500, 2000 - nivel * 80);
+			proximoKamikazeTime = ahora + base + rnd.nextInt(2000);
+		}
+
+		// mover balas enemigas y colisiones contra jugador
+		for (Iterator<BalaEnemiga> it = balasEnemigas.iterator(); it.hasNext();) {
+			BalaEnemiga be = it.next();
 			be.mover();
 			if (be.y > ALTO)
-				itBE.remove();
+				it.remove();
 			else if (be.getRect().intersects(jugador.getRect())) {
-				itBE.remove();
-				jugador.vidas -= 1;
-				if (jugador.vidas <= 0)
+				it.remove();
+				jugador.vidas--;
+				if (jugador.vidas <= 0) {
 					juegoTerminado = true;
+					return;
+				}
 			}
 		}
+
 		// colisiones: balas del jugador vs enemigos
-		itB = balas.iterator();
-		while (itB.hasNext()) {
+		for (Iterator<Bala> itB = balas.iterator(); itB.hasNext();) {
 			Bala b = itB.next();
-			Iterator<Enemigo> itE = enemigos.iterator();
 			boolean impacto = false;
-			while (itE.hasNext()) {
+			for (Iterator<Enemigo> itE = enemigos.iterator(); itE.hasNext();) {
 				Enemigo en = itE.next();
 				if (b.getRect().intersects(en.getRect())) {
-					en.hp -= 1;
+					en.hp--;
 					if (en.hp <= 0) {
+						// si era el kamikaze atacante, liberar
+						if (en == kamikazeAtacante)
+							kamikazeAtacante = null;
 						itE.remove();
-						puntos += 10 + nivel * 2; // más puntos a niveles altos
+						puntos += 10 + nivel * 2;
 					}
 					impacto = true;
 					break;
@@ -169,36 +225,36 @@ public class PanelJuego extends JPanel implements ActionListener, KeyListener {
 			if (impacto)
 				itB.remove();
 		}
-		// si ya no quedan enemigos, sube de nivel
+
+		// si ya no quedan enemigos, subir nivel (infinitos)
 		if (enemigos.isEmpty()) {
 			nivel++;
 			generarNivel(nivel);
 		}
+
 		repaint();
 	}
 
 	@Override
 	protected void paintComponent(Graphics g) {
 		super.paintComponent(g);
+
 		// HUD
 		g.setColor(Color.WHITE);
 		g.setFont(new Font("Consolas", Font.PLAIN, 16));
 		g.drawString("Puntos: " + puntos, 10, 20);
-		g.drawString("Nivel: " + nivel, ANCHO - 120, 20);
-		g.drawString("Vidas: " + jugador.vidas, ANCHO / 2 - 30, 20);
-		// jugador
+		g.drawString("Nivel: " + nivel, 120, 20);
+		g.drawString("Vidas: " + jugador.vidas, 220, 20);
+
+		// dibujar
 		jugador.dibujar(g);
-		// balas jugador
-		g.setColor(Color.YELLOW);
 		for (Bala b : balas)
 			b.dibujar(g);
-		// enemigos
-		for (Enemigo en : enemigos)
-			en.dibujar(g);
-		// balas enemigas
-		g.setColor(Color.PINK);
 		for (BalaEnemiga be : balasEnemigas)
 			be.dibujar(g);
+		for (Enemigo en : enemigos)
+			en.dibujar(g);
+
 		if (juegoTerminado) {
 			g.setColor(new Color(0, 0, 0, 170));
 			g.fillRect(0, 0, ANCHO, ALTO);
@@ -226,10 +282,10 @@ public class PanelJuego extends JPanel implements ActionListener, KeyListener {
 			puntos = 0;
 			nivel = 1;
 			jugador = new Jugador(ANCHO / 2 - 20, ALTO - 70);
+			jugador.vidas = 3;
 			juegoTerminado = false;
 			generarNivel(nivel);
 		}
-
 	}
 
 	@Override
