@@ -3,6 +3,8 @@ import javax.swing.SwingUtilities;
 
 public class VentanaJuego extends JFrame {
 
+	private static final long serialVersionUID = 1L;
+
 	public VentanaJuego() {
 		setTitle("Space Invaders");
 		setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
