@@ -3,7 +3,8 @@ import java.awt.*;
 public class Jugador {
 	public int x, y;
 	public int ancho = 40, alto = 20;
-	public int velocidad = 5;
+	public int velocidad = 6; // un poco más rápido para dificultad
+	public int vidas = 3; // el jugador tiene 3 vidas
 
 	public Jugador(int x, int y) {
 		this.x = x;
@@ -26,8 +27,14 @@ public class Jugador {
 		return x + ancho / 2;
 	}
 
+	public Rectangle getRect() {
+		return new Rectangle(x, y, ancho, alto);
+	}
+
 	public void dibujar(Graphics g) {
 		g.setColor(Color.CYAN);
 		g.fillRect(x, y, ancho, alto);
+		g.setColor(Color.BLUE);
+		g.fillRect(x + 10, y - 8, 20, 8);
 	}
 }
